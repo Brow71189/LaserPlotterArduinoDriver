@@ -40,6 +40,13 @@ short burnin_time_ms = 100;
 long position_at_direction_changeA = 0;
 long position_at_direction_changeB = 0;
 
+int count_until = 1;
+volatile int current_count = 0;
+volatile long* counter;
+long current_position;
+long last_position;
+float current_speed;
+
 void setup()
 {
   pinMode(MotorAPin1, OUTPUT);
@@ -55,11 +62,36 @@ void setup()
     MotorBPin1 -= 8;
     MotorBPin2 -= 8;
   }
+  //pinMode(ledPin, OUTPUT);
+
+  // initialize Timer0
+  noInterrupts(); // disable all interrupts
+  TCCR0A = 0;
+  TCCR0B = 0;
+  TCNT0 = 0;
+  
+  OCR0A = 250; // compare match register 16MHz/64/1000Hz
+  //TCCR0B |= (1 << WGM12); // CTC mode and 64 prescaler
+  //TCCR0B |= (1 << CS10|CS11); // 64 prescaler
+  TIMSK0 |= (1 << OCIE0A); // enable timer compare interrupt
   attachInterrupt(digitalPinToInterrupt(InterruptPinA), countA, RISING);
   attachInterrupt(digitalPinToInterrupt(InterruptPinB), countB, CHANGE);
+  interrupts(); // enable all interrupts
   load_from_EEPROM();
   Serial.begin(115200);
   Serial.setTimeout(100);
+}
+
+ISR(Timer0_COMPA_vect) // timer compare interrupt service routine
+{
+  //digitalWrite(ledPin, digitalRead(ledPin) ^ 1); // toggle LED pin
+  current_count++;
+  if (current_count >= count_until) {
+    current_count = 0;
+    current_position = *counter;
+    current_speed = (float)(abs(last_position - current_position)) / (float)count_until * 1e3;
+    last_position = current_position;
+  }
 }
 
 void loop()
@@ -157,7 +189,6 @@ char move_to(char motor_id, long* target_pos) {
     Serial.print("Moving motor "); Serial.print(motor_id); Serial.print(" to "); Serial.println(*target_pos);
   }
   char return_value = 'X';
-  volatile long* counter;
   int backlashSteps;
   byte MotorPin1;
   byte MotorPin2;
@@ -210,8 +241,14 @@ char move_to(char motor_id, long* target_pos) {
   //Serial.println(*PWMValue);Serial.println(MaxPWMValue);
   //Serial.println(MinPWMValue);
   
-  float current_speed = target_speed;
+  current_speed = target_speed;
   long difference = *counter - *target_pos;
+
+  int cycle_time = (int)(1.0/target_speed*2000.0); // time in ms after which we want to calculate the speed, it is calculated as the time after two steps should have passed
+  if (cycle_time == 0) {
+    cycle_time = 1; // the shortest time we accept is 1 ms
+  }
+  count_until = cycle_time;
 //  if (last_direction > 0 && difference < 0) {
 //    //Serial.println("backlash left");
 //    *counter -= backlashSteps;
@@ -228,17 +265,8 @@ char move_to(char motor_id, long* target_pos) {
 //    last_direction = 0;
 //  }
 
-  if (LaserState) {
-    //*SensorBank |= 1<<LaserPin;
-    digitalWrite(LaserPin, HIGH);
-    delay(burnin_time_ms);
-  } else {
-    //*SensorBank &= ~(1<<LaserPin);
-    digitalWrite(LaserPin, LOW);
-  }
-  
-  long current_position = *counter;
-  long last_position = current_position + 1;
+  current_position = *counter;
+  last_position = current_position + 1;
   unsigned long now;
   unsigned long last_loop_time = 0;
   unsigned long last_blocked = 0;
@@ -263,23 +291,21 @@ char move_to(char motor_id, long* target_pos) {
     }
   }
   
+  if (LaserState) {
+    //*SensorBank |= 1<<LaserPin;
+    digitalWrite(LaserPin, HIGH);
+    delay(burnin_time_ms);
+  } else {
+    //*SensorBank &= ~(1<<LaserPin);
+    digitalWrite(LaserPin, LOW);
+  }
+  int count_until_micros = count_until*1000;
   while (difference != 0) {
     now = micros();
 	  current_position = *counter;
 	  difference = current_position - *target_pos;
     
-  	if ((last_position != current_position && (now - last_loop_time) > 7000) || (now-last_loop_time > 30000)) {// only update speed if counter changed since last time or if more time passed than we would expect for the given speed
-      //long time_diff = *this_time - *last_time;
-      //if (time_diff != 0) {
-      //speed_now = micros();
-      //speed_position = *counter;
-      if (true) {//(now - last_loop_time != 0) {
-        current_speed = (float)(abs(last_position - current_position)) / (float)(now - last_loop_time) * 1e6;
-        //current_speed = (float)(abs(speed_last_position - speed_position)) / (float)(speed_now - speed_last_time) * 1e6;
-        //speed_last_time = speed_now;
-        //speed_last_position = speed_position;
-      }
-            
+  	if (last_position != current_position && (now - last_loop_time) > count_until_micros) {// only update speed if counter changed since last time or if more time passed than we would expect for the given speed
   	  if (verbosity > 1) {
         Serial.print(*PWMValue); Serial.print(" Current speed: "); Serial.println(current_speed); //Serial.write(" "); Serial.print(last_position-current_position); Serial.write(" "); Serial.print(*PWMValue); Serial.write(" "); Serial.print(time_diff); Serial.write(" "); Serial.println(target_speed);
   	  }
@@ -327,7 +353,7 @@ char move_to(char motor_id, long* target_pos) {
       last_position = current_position;
       last_moved = now;
       not_moved = 0;
-	  } else if ((now - last_moved) > 10000 && (now - last_blocked) > 10000) {
+	  } else if ((now - last_moved) > 3*count_until_micros && (now - last_blocked) > 3*count_until_micros) {
         not_moved++;
         if (not_moved > 5 && *PWMValue < MaxPWMValue) {
           (*PWMValue)++;
@@ -345,7 +371,7 @@ char move_to(char motor_id, long* target_pos) {
           return_value = 'B';
           not_moved = 0;
           break;
-          }
+         }
          last_blocked = now;
 	  }
   }
