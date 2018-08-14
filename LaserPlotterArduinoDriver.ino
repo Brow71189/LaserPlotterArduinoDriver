@@ -82,7 +82,7 @@ void setup()
   Serial.setTimeout(100);
 }
 
-ISR(Timer0_COMPA_vect) // timer compare interrupt service routine
+ISR(TIMER0_COMPA_vect )//(Timer0_COMPA_vect) // timer compare interrupt service routine
 {
   //digitalWrite(ledPin, digitalRead(ledPin) ^ 1); // toggle LED pin
   current_count++;
