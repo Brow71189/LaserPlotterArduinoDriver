@@ -40,8 +40,8 @@ short burnin_time_ms = 100;
 long position_at_direction_changeA = 0;
 long position_at_direction_changeB = 0;
 
-int count_until = 1;
-volatile int current_count = 0;
+unsigned int count_until = 1;
+volatile unsigned int current_count = 0;
 volatile long* counter;
 long current_position;
 long last_position;
@@ -299,7 +299,7 @@ char move_to(char motor_id, long* target_pos) {
     //*SensorBank &= ~(1<<LaserPin);
     digitalWrite(LaserPin, LOW);
   }
-  int count_until_micros = count_until*1000;
+  unsigned long count_until_micros = count_until*1000;
   while (difference != 0) {
     now = micros();
 	  current_position = *counter;
